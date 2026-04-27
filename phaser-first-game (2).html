@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>My First Phaser Game</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a0a2e;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    font-family: 'Courier New', monospace;
+  }
+  #game-container canvas {
+    display: block;
+    border: 2px solid #4a2a7a;
+    box-shadow: 0 0 40px rgba(123, 63, 228, 0.4);
+  }
+  #info {
+    color: #a87fd4;
+    font-size: 12px;
+    margin-top: 10px;
+    letter-spacing: 2px;
+  }
+</style>
+</head>
+<body>
+<div id="game-container"></div>
+<div id="info">← → MOVE &nbsp;|&nbsp; ↑ JUMP &nbsp;|&nbsp; COLLECT ALL STARS &nbsp;|&nbsp; AVOID BOMBS</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/phaser/3.60.0/phaser.min.js"></script>
+<script>
+
+// ─── Game variables ─────────────────────────────────────────────────────────
+var player, platforms, cursors, stars, bombs;
+var scoreText, livesText;
+var score = 0, lives = 3, gameOver = false;
+
+// ─── Phaser config ──────────────────────────────────────────────────────────
+var config = {
+    type: Phaser.AUTO,
+    width: 800,
+    height: 500,
+    parent: 'game-container',
+    backgroundColor: '#1a0a2e',
+    physics: {
+        default: 'arcade',
+        arcade: {
+            gravity: { y: 350 },
+            debug: false
+        }
+    },
+    scene: { preload, create, update }
+};
+
+new Phaser.Game(config);
+
+// ─── PRELOAD: generate all assets with canvas ───────────────────────────────
+function preload() {
+
+    // --- Sky ---
+    var skyC = document.createElement('canvas');
+    skyC.width = 800; skyC.height = 500;
+    var sk = skyC.getContext('2d');
+    var sg = sk.createLinearGradient(0, 0, 0, 500);
+    sg.addColorStop(0,   '#080420');
+    sg.addColorStop(0.6, '#1a1060');
+    sg.addColorStop(1,   '#2d1a80');
+    sk.fillStyle = sg;
+    sk.fillRect(0, 0, 800, 500);
+    // background stars
+    for (var i = 0; i < 120; i++) {
+        var br = Math.random();
+        sk.fillStyle = `rgba(255,255,255,${0.2 + br * 0.8})`;
+        sk.beginPath();
+        sk.arc(Math.random()*800, Math.random()*420, 0.4 + Math.random()*1.4, 0, Math.PI*2);
+        sk.fill();
+    }
+    this.textures.addCanvas('sky', skyC);
+
+    // --- Ground platform tile (400×32) ---
+    var gC = document.createElement('canvas');
+    gC.width = 400; gC.height = 32;
+    var gc = gC.getContext('2d');
+    var gg = gc.createLinearGradient(0, 0, 0, 32);
+    gg.addColorStop(0,   '#9b6eff');
+    gg.addColorStop(0.2, '#6d3fe0');
+    gg.addColorStop(1,   '#3a1a66');
+    gc.fillStyle = gg;
+    gc.fillRect(0, 0, 400, 32);
+    // top highlight
+    gc.fillStyle = '#c0a0ff';
+    gc.fillRect(0, 0, 400, 2);
+    // bottom shadow
+    gc.fillStyle = '#1e0a44';
+    gc.fillRect(0, 30, 400, 2);
+    // tile lines
+    gc.strokeStyle = 'rgba(255,255,255,0.07)';
+    gc.lineWidth = 1;
+    for (var x = 0; x < 400; x += 40) {
+        gc.beginPath(); gc.moveTo(x, 0); gc.lineTo(x, 32); gc.stroke();
+    }
+    this.textures.addCanvas('ground', gC);
+
+    // --- Player sprite sheet  (9 frames × 32px wide, 48px tall) ---
+    // Frame layout: 0-3 run-left, 4 turn, 5-8 run-right
+    var dC = document.createElement('canvas');
+    dC.width = 32*9; dC.height = 48;
+    var dc = dC.getContext('2d');
+
+    function drawDude(ctx, fx, dir, phase) {
+        // dir: -1=left, 0=face, 1=right
+        // phase: 0..3 walk cycle
+        var bodyGrad = ctx.createLinearGradient(fx+8, 0, fx+24, 0);
+        bodyGrad.addColorStop(0, '#ff6bbd');
+        bodyGrad.addColorStop(1, '#c44dff');
+        ctx.fillStyle = bodyGrad;
+        ctx.fillRect(fx+8, 16, 16, 18);
+
+        // head
+        ctx.fillStyle = '#ffcc88';
+        ctx.fillRect(fx+9, 3, 14, 13);
+
+        // eyes — shift based on direction
+        ctx.fillStyle = '#1a0a2e';
+        var ex = (dir === -1) ? 2 : (dir === 1) ? 4 : 3;
+        ctx.fillRect(fx+9+ex,   7, 3, 3);
+        ctx.fillRect(fx+9+ex+5, 7, 3, 3);
+
+        // hair
+        ctx.fillStyle = '#cc6600';
+        ctx.fillRect(fx+9, 1, 14, 4);
+
+        // legs
+        ctx.fillStyle = '#5533aa';
+        var l1off = [0, -4,  0,  4][phase];
+        var l2off = [0,  4,  0, -4][phase];
+        ctx.fillRect(fx+9,  34+l1off, 6, 12 - Math.abs(l1off)/2);
+        ctx.fillRect(fx+17, 34+l2off, 6, 12 - Math.abs(l2off)/2);
+
+        // arms
+        ctx.fillStyle = '#ffcc88';
+        var a1off = [0, 3, 0, -3][phase];
+        var a2off = [0, -3, 0, 3][phase];
+        ctx.fillRect(fx+3,  17+a1off, 6, 10);
+        ctx.fillRect(fx+23, 17+a2off, 6, 10);
+    }
+
+    // 0-3: run left
+    [1,2,3,0].forEach((p,i) => drawDude(dc, i*32, -1, p));
+    // 4: face camera
+    drawDude(dc, 4*32, 0, 0);
+    // 5-8: run right
+    [1,2,3,0].forEach((p,i) => drawDude(dc, (5+i)*32, 1, p));
+
+    this.textures.addSpriteSheet('dude', dC, { frameWidth: 32, frameHeight: 48 });
+
+    // --- Star (24×24) ---
+    var stC = document.createElement('canvas');
+    stC.width = 24; stC.height = 24;
+    var stc = stC.getContext('2d');
+    stc.save();
+    stc.translate(12, 12);
+    stc.shadowColor = '#ffd700';
+    stc.shadowBlur = 8;
+    var stg = stc.createRadialGradient(0,-2,1, 0,0,10);
+    stg.addColorStop(0,   '#fffacc');
+    stg.addColorStop(0.5, '#ffd700');
+    stg.addColorStop(1,   '#ff8c00');
+    stc.fillStyle = stg;
+    stc.beginPath();
+    for (var j = 0; j < 5; j++) {
+        var a1 = (j*4*Math.PI/5) - Math.PI/2;
+        var a2 = a1 + 2*Math.PI/5;
+        if (j===0) stc.moveTo(Math.cos(a1)*10, Math.sin(a1)*10);
+        else       stc.lineTo(Math.cos(a1)*10, Math.sin(a1)*10);
+        stc.lineTo(Math.cos(a2)*5, Math.sin(a2)*5);
+    }
+    stc.closePath();
+    stc.fill();
+    stc.restore();
+    this.textures.addCanvas('star', stC);
+
+    // --- Bomb (20×20) ---
+    var bmC = document.createElement('canvas');
+    bmC.width = 20; bmC.height = 20;
+    var bmc = bmC.getContext('2d');
+    bmc.save();
+    bmc.shadowColor = '#ff4444';
+    bmc.shadowBlur = 6;
+    var bmg = bmc.createRadialGradient(8,8,1, 9,10,8);
+    bmg.addColorStop(0, '#ff6666');
+    bmg.addColorStop(0.6,'#cc1111');
+    bmg.addColorStop(1, '#550000');
+    bmc.fillStyle = bmg;
+    bmc.beginPath();
+    bmc.arc(9, 12, 7, 0, Math.PI*2);
+    bmc.fill();
+    // fuse
+    bmc.strokeStyle = '#cc9900';
+    bmc.lineWidth = 2;
+    bmc.beginPath();
+    bmc.moveTo(9, 5);
+    bmc.bezierCurveTo(13, 2, 16, 3, 14, 6);
+    bmc.stroke();
+    // spark
+    bmc.fillStyle = '#ffff66';
+    bmc.beginPath(); bmc.arc(14, 5, 2, 0, Math.PI*2); bmc.fill();
+    bmc.restore();
+    this.textures.addCanvas('bomb', bmC);
+}
+
+// ─── CREATE ──────────────────────────────────────────────────────────────────
+function create() {
+    score = 0; lives = 3; gameOver = false;
+
+    this.add.image(400, 250, 'sky');
+
+    // Platforms (static physics group)
+    platforms = this.physics.add.staticGroup();
+    platforms.create(400, 484, 'ground').setScale(2).refreshBody();
+    platforms.create(600, 340, 'ground');
+    platforms.create(50,  220, 'ground');
+    platforms.create(740, 190, 'ground');
+
+    // Player
+    player = this.physics.add.sprite(100, 390, 'dude');
+    player.setBounce(0.15);
+    player.setCollideWorldBounds(true);
+
+    // Animations
+    this.anims.create({
+        key: 'left',
+        frames: this.anims.generateFrameNumbers('dude', { start: 0, end: 3 }),
+        frameRate: 10,
+        repeat: -1
+    });
+    this.anims.create({
+        key: 'turn',
+        frames: [{ key: 'dude', frame: 4 }],
+        frameRate: 20
+    });
+    this.anims.create({
+        key: 'right',
+        frames: this.anims.generateFrameNumbers('dude', { start: 5, end: 8 }),
+        frameRate: 10,
+        repeat: -1
+    });
+
+    // Stars group
+    stars = this.physics.add.group({
+        key: 'star',
+        repeat: 11,
+        setXY: { x: 12, y: 0, stepX: 70 }
+    });
+    stars.children.iterate(function(child) {
+        child.setBounceY(Phaser.Math.FloatBetween(0.4, 0.8));
+    });
+
+    // Bombs group
+    bombs = this.physics.add.group();
+
+    // Colliders
+    this.physics.add.collider(player, platforms);
+    this.physics.add.collider(stars,  platforms);
+    this.physics.add.collider(bombs,  platforms);
+
+    // Overlaps
+    this.physics.add.overlap(player, stars,  collectStar, null, this);
+    this.physics.add.overlap(player, bombs,  hitBomb,     null, this);
+
+    // HUD
+    var hudBg = this.add.graphics();
+    hudBg.fillStyle(0x000000, 0.55);
+    hudBg.fillRoundedRect(10, 10, 170, 38, 8);
+    hudBg.fillRoundedRect(620, 10, 170, 38, 8);
+
+    scoreText = this.add.text(20, 20, 'SCORE: 0', {
+        fontSize: '20px', fill: '#ffd700',
+        fontFamily: 'Courier New',
+        stroke: '#6633cc', strokeThickness: 2
+    });
+    livesText = this.add.text(630, 20, '❤ ❤ ❤', {
+        fontSize: '20px', fill: '#ff6bbd',
+        fontFamily: 'Courier New',
+        stroke: '#660033', strokeThickness: 2
+    });
+
+    cursors = this.input.keyboard.createCursorKeys();
+}
+
+// ─── UPDATE ──────────────────────────────────────────────────────────────────
+function update() {
+    if (gameOver) return;
+
+    if (cursors.left.isDown) {
+        player.setVelocityX(-180);
+        player.anims.play('left', true);
+    } else if (cursors.right.isDown) {
+        player.setVelocityX(180);
+        player.anims.play('right', true);
+    } else {
+        player.setVelocityX(0);
+        player.anims.play('turn');
+    }
+
+    if (cursors.up.isDown && player.body.touching.down) {
+        player.setVelocityY(-400);
+    }
+}
+
+// ─── COLLECT STAR ────────────────────────────────────────────────────────────
+function collectStar(player, star) {
+    star.disableBody(true, true);
+    score += 10;
+    scoreText.setText('SCORE: ' + score);
+
+    if (stars.countActive(true) === 0) {
+        // Respawn all stars
+        stars.children.iterate(function(child) {
+            child.enableBody(true, child.x, 0, true, true);
+        });
+        // Spawn a bomb on the opposite side
+        var x = player.x < 400
+            ? Phaser.Math.Between(400, 780)
+            : Phaser.Math.Between(20, 380);
+        var bomb = bombs.create(x, 16, 'bomb');
+        bomb.setBounce(1);
+        bomb.setCollideWorldBounds(true);
+        bomb.setVelocity(Phaser.Math.Between(-200, 200), 20);
+        bomb.allowGravity = false;
+    }
+}
+
+// ─── HIT BOMB ────────────────────────────────────────────────────────────────
+function hitBomb(player, bomb) {
+    bomb.disableBody(true, true);
+    lives--;
+
+    var hearts = '';
+    for (var i = 0; i < lives; i++) hearts += '❤ ';
+    livesText.setText(lives > 0 ? hearts.trim() : '☠');
+
+    if (lives <= 0) {
+        this.physics.pause();
+        player.setTint(0xff2222);
+        player.anims.play('turn');
+        gameOver = true;
+
+        var overlay = this.add.graphics();
+        overlay.fillStyle(0x000000, 0.75);
+        overlay.fillRect(0, 0, 800, 500);
+
+        this.add.text(400, 160, 'GAME OVER', {
+            fontSize: '60px', fill: '#ff4444',
+            fontFamily: 'Courier New',
+            stroke: '#ff0000', strokeThickness: 5
+        }).setOrigin(0.5);
+
+        this.add.text(400, 255, 'FINAL SCORE: ' + score, {
+            fontSize: '28px', fill: '#ffd700',
+            fontFamily: 'Courier New'
+        }).setOrigin(0.5);
+
+        var btn = this.add.text(400, 340, '[ PLAY AGAIN ]', {
+            fontSize: '24px', fill: '#c44dff',
+            fontFamily: 'Courier New',
+            stroke: '#7c4dff', strokeThickness: 2
+        }).setOrigin(0.5).setInteractive({ useHandCursor: true });
+
+        btn.on('pointerover', () => btn.setStyle({ fill: '#ff88ff' }));
+        btn.on('pointerout',  () => btn.setStyle({ fill: '#c44dff' }));
+        btn.on('pointerdown', () => { this.scene.restart(); });
+
+    } else {
+        // Brief flash on hit
+        player.setTint(0xff8888);
+        this.time.delayedCall(700, () => player.clearTint());
+    }
+}
+</script>
+</body>
+</html>
